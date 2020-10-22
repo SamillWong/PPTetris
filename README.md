@@ -7,11 +7,11 @@ Modern Tetris with SRS rotation and hold, fully written in C++.
 - There are 7 "Tetromino" available for the player to stack with, they are the I, O, T, S, Z, J, and L shaped pieces. Each tetromino is made of four square blocks, hence the "tetro-" prefix.
 - The game takes place on a 20x10 "board", or playfield, where pieces spawn at the top of the board, falling down at a constant rate.
 - The player can:
-		> Move the current piece left [LeftArrow] or right [RightArrow].
-		> Rotate the current piece clockwise [Z] or anticlockwise [X, UpArrow].
-		> Speed up the descent of the current piece by "soft-dropping" [DownArrow].
-		> Instantly drop the piece by "hard-dropping" [Space].
-		> Hold the current piece [C].
+	- Move the current piece left [LeftArrow] or right [RightArrow].
+	- Rotate the current piece clockwise [Z] or anticlockwise [X, UpArrow].
+	- Speed up the descent of the current piece by "soft-dropping" [DownArrow].
+	- Instantly drop the piece by "hard-dropping" [Space].
+	- Hold the current piece [C].
 - By clearing lines, the player earns "points". The amount of points gained is exponentially increased with the number of lines cleared simultaneously.
 
 ### Installation
