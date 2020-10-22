@@ -16,8 +16,9 @@ Modern Tetris with SRS rotation and hold, fully written in C++.
 
 ### Installation
 
-Just make and run.
-Built and tested on WSL Ubuntu 2004.2020.812.0
+Tetris++ requires [WSL Ubuntu](https://ubuntu.com/wsl).
+
+Built and tested on WSL version 2004.2020.812.0
 
 ```sh
 $ make all
