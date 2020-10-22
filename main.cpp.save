@@ -1,0 +1,438 @@
+// main.cpp
+#include <termios.h>
+#include <unistd.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <iostream>
+#include <string>
+
+#define F_WIDTH 10
+#define F_HEIGHT 20
+
+#define FRAME_USEC 100000
+
+#define KEY_UP 'A' // ^[[A
+#define KEY_DOWN 'B' // ^[[B
+#define KEY_LEFT 'D' // ^[[D
+#define KEY_RIGHT 'C' // ^[[C
+#define KEY_HARD_DROP ' '
+#define KEY_ROTATE_AC 'z'
+#define KEY_ROTATE_CC 'x'
+#define KEY_HOLD 'c'
+#define KEY_EXIT 'q'
+
+using namespace std;
+
+// Declare termios attributes
+struct itimerval tv;
+
+// Initialise field
+int field[F_HEIGHT][F_WIDTH] = {0};
+int currentPiece[F_HEIGHT+3][F_WIDTH+2] = {0};
+
+// Game state variables
+bool isGameOver;
+bool isPieceActive;
+
+// Piece data
+const int tetromino[7][2][4] = {{{1,1,1,1}, // I
+								 {0,0,0,0}},
+								{{0,2,2,0}, // O
+								 {0,2,2,0}},
+								{{0,3,0,0}, // T
+								 {3,3,3,0}},
+								{{0,4,4,0}, // S
+								 {4,4,0,0}},
+								{{5,5,0,0}, // Z
+								 {0,5,5,0}},
+								{{6,0,0,0}, // J
+								 {6,6,6,0}},
+								{{0,0,7,0}, // L
+								 {7,7,7,0}}};
+
+// Toggles terminal cursor visibility, ANSI escape sequence from: https://gist.github.com/drm/1688256
+void ShowCursor(bool visible)
+{
+	cout << "\033[?25" << (visible ? "h" : "l");
+}
+
+// Prints text to terminal in colour using ANSI escape sequences
+void Format(int color)
+{
+	// Default background/foreground colours as zero
+	int bg = 0;
+
+	switch(color)
+	{
+		case 0: {bg = 0; break;} // Black
+		case 1:	{bg = 41; break;} // Red
+		case 2:	{bg = 42; break;} // Green
+		case 3:	{bg = 43; break;} // Yellow
+		case 4:	{bg = 44; break;} // Blue
+		case 5:	{bg = 45; break;} // Magenta
+		case 6:	{bg = 46; break;} // Cyan
+		case 7:	{bg = 47; break;} // White
+		case 8: {cout << "\033[48;2;255;165;0m"; return;} // Orange (RGB)
+	}
+
+	cout << "\033[0;" << bg << "m";
+
+}
+
+// Formats tetromino with their respective colour
+void GetPieceColor(int pID)
+{
+	switch(pID)
+	{
+		case 0: {Format(0); break;} // Empty
+		case 1: {Format(6); break;} // I
+		case 2: {Format(3); break;} // O
+		case 3: {Format(5); break;} // T
+		case 4: {Format(2); break;} // S
+		case 5: {Format(1); break;} // Z
+		case 6: {Format(4); break;} // J
+		case 7: {Format(8); break;} // L
+	}
+}
+
+// Randomly generates next 7-bag piece sequence
+int* GenerateBag()
+{
+	// Dynamically initialise bag array
+	int* bag = new int[7];
+
+	// Default bag to invalid value
+	for (int bagID = 0; bagID < 7; bagID++) {
+		bag[bagID] = 7;
+	}
+
+	// Declare function variables
+	int i = 0;
+	int newID;
+
+	// Get number sequence
+	while (i != 7)
+	{
+		// Assume newID as valid
+		bool isValidID = true;
+
+		// Get new random ID [0-6]
+		newID = rand() % 7;
+
+		// Reject newID if already in bag
+		for (int bagID = 0; bagID < 7; bagID++) {
+			if (bag[bagID] == newID) {
+				isValidID = false;
+				break;
+			}
+		}
+
+		// Set newID as next ID
+		if (isValidID) {
+			bag[i] = newID;
+			i++;
+		}
+
+	}
+
+	return bag;
+
+}
+
+// Copy new piece of pID [0-6] to currentPiece array
+int GetNewPiece(int pID)
+{
+	for (int yPos = 0; yPos < 2; yPos++) {
+		for (int xPos = 0; xPos < 4; xPos++) {
+			currentPiece[yPos+1][F_WIDTH/2-2+xPos] = tetromino[pID][yPos][xPos];
+		}
+	}
+
+	return 1;
+
+}
+
+// Copy currentPiece to field array
+void SetPiece()
+{
+	for (int yPos = 0; yPos < F_HEIGHT; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH; xPos++) {
+			if (field[yPos][xPos] == 0) {
+				field[yPos][xPos] = currentPiece[yPos+3][xPos];
+			}
+		}
+	}
+
+	// Clear currentPiece field
+	for (int yPos = 0; yPos < F_HEIGHT+3; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+			currentPiece[yPos][xPos] = 0;
+		}
+	}
+
+	isPieceActive = false;
+
+}
+
+// Moves elements in currentPiece array in y/x direction, returns 1 if successful
+int MovePiece(int dy, int dx)
+{
+
+	// Initialise temporary array
+	int tempField[F_HEIGHT+3][F_WIDTH+2] = {0};
+
+	// Copy currentPiece to temporary array
+	for (int yPos = 0; yPos < F_HEIGHT+3; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+			tempField[yPos][xPos] = currentPiece[yPos][xPos];
+		}
+	}
+
+	// Check if movement will go out-of-bounds
+	for (int yPos = 0; yPos < F_HEIGHT+3; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+			if (tempField[yPos][xPos] != 0 && (yPos-dy > F_HEIGHT+2 || xPos-dx > F_WIDTH-1 || xPos-dx < 0)) {
+				return 0;
+			}
+		}
+	}
+
+	// Check if movement will collide with field
+	for (int yPos = 0; yPos < F_HEIGHT; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH; xPos++) {
+			if (tempField[yPos+3][xPos] != 0 && field[yPos-dy][xPos-dx] != 0) {
+				return 0;
+			}
+		}
+	}
+
+	// Allow movement
+	for (int yPos = 0; yPos < F_HEIGHT+3; yPos++) {
+		for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+			currentPiece[yPos-dy][xPos-dx] = tempField[yPos][xPos];
+		}
+	}
+
+	return 1;
+
+}
+
+// Drops current piece to bottom
+void HardDrop()
+{
+	bool isFalling = true;
+
+	while(isFalling)
+	{
+		isFalling = MovePiece(-1, 0);
+	}
+
+	SetPiece();
+
+}
+
+// Prints the current frame
+void Update()
+{
+	// Top indent
+	Format(0);
+	cout << endl;
+
+	for (int yPos = 0; yPos < F_HEIGHT+2; yPos++) {
+		// Side indent
+		Format(0);
+		cout << "  ";
+
+		for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+			if (xPos == 0 || xPos == F_WIDTH+1 || yPos == F_HEIGHT+1) {
+				// Render field boundaries
+				Format(7);
+			} else if (currentPiece[yPos-1+3][xPos-1] != 0) {
+				// Render current piece
+				GetPieceColor(currentPiece[yPos-1+3][xPos-1]);
+			} else if (yPos == 0) {
+				// Render open top
+				Format(0);
+			} else {
+				// Render field
+				GetPieceColor(field[yPos-1][xPos-1]);
+			}
+
+			cout << "  ";
+
+		}
+		Format(0);
+		cout << endl;
+
+	}
+
+}
+
+// Keypress event handler
+void GetKeyInput()
+{
+	int keyPress = getchar();
+
+	switch(keyPress)
+	{
+		case KEY_LEFT: {MovePiece(0,1); break;}
+		case KEY_RIGHT: {MovePiece(0,-1); break;}
+		case KEY_DOWN: {MovePiece(-1,0); break;}
+		case KEY_HARD_DROP: {HardDrop(); break;}
+		case KEY_EXIT: {isGameOver = true; break;}
+	}
+
+	return;
+
+}
+
+// Execute on exit
+void quit(struct termios oldAttr)
+{
+	ShowCursor(true);
+	tcsetattr(0, TCSANOW, &oldAttr);
+	cout << endl << "   Exiting..." << endl << endl;
+	return;
+
+}
+
+// SIGINT handler, code from: https://stackoverflow.com/questions/1641182/how-can-i-catch-a-ctrl-c-event
+void SignalHandler(int signal)
+{
+	switch(signal) {
+		case SIGTERM:
+		case SIGINT:
+		case SIGSEGV:
+			isGameOver = true;
+			break;
+		case SIGALRM:
+			tv.it_value.tv_usec -= tv.it_value.tv_usec / 3000;
+			setitimer(0, &tv, NULL);
+			break;
+	}
+}
+
+int main(void)
+{
+	// Initialise signal handler
+	struct sigaction siga;
+
+	sigemptyset(&siga.sa_mask);
+
+	siga.sa_flags = 0;
+	siga.sa_handler = SignalHandler;
+
+	sigaction(SIGALRM, &siga, NULL);
+	sigaction(SIGTERM, &siga, NULL);
+	sigaction(SIGINT,  &siga, NULL);
+	sigaction(SIGSEGV, &siga, NULL);
+
+	// Dummy SIGALRM handler to interrupt getchar() call
+	// https://stackoverflow.com/questions/5322143/add-a-timeout-for-getchar
+	tv.it_value.tv_usec = FRAME_USEC;
+	SignalHandler(SIGALRM);
+
+	// Initialise terminal attributes
+	struct termios oldAttr;
+	struct termios newAttr;
+
+	tcgetattr(STDIN_FILENO, &oldAttr);
+	newAttr = oldAttr;
+	newAttr.c_lflag &= ~(ICANON|ECHO);
+	newAttr.c_cc[VTIME] = 0;
+	newAttr.c_cc[VMIN] = 0;
+	tcsetattr(0, TCSANOW, &newAttr);
+	ShowCursor(false);
+
+	// Seed rand()
+	srand(time(NULL));
+
+	// Initialise game state
+	int debugTick = 0, moveTick = 0;
+	int bagID = 0;
+	int *bag = GenerateBag();
+
+	// Clear terminal output
+	cout << "\033[2J";
+
+	// Game loop
+	while (!isGameOver)
+	{
+		// Game tick (1000000 = 1s)
+		debugTick++;
+		moveTick++;
+
+		// Game logic
+
+		// Refresh isPieceActive
+		for (int yPos = 0; yPos < F_HEIGHT+3; yPos++) {
+			for (int xPos = 0; xPos < F_WIDTH+2; xPos++) {
+				if (currentPiece[yPos][xPos] != 0) {
+					isPieceActive = true;
+				}
+			}
+		}
+
+		// Generate new piece if no piece is active
+		if (!isPieceActive && bagID < 7) {
+			GetNewPiece(bag[bagID]);
+			isPieceActive = true;
+			bagID++;
+		}
+
+		// Generate new bag on start, or on end of bag sequence
+		if (bagID == 7) {
+			delete bag;
+			int *bag = GenerateBag();
+			bagID = 0;
+		}
+
+		// Update
+		cout << "\033[H";
+		Update();
+
+		// Input handler
+		GetKeyInput();
+
+		// Gravity
+		if (moveTick == 10) {
+			MovePiece(-1,0);
+			moveTick = 0;
+		}
+
+		// Debug
+		cout << endl << "   ----- DEBUG INFO -----" << endl;
+		cout << "   Tick: " << debugTick << "  isActive: " << isPieceActive << endl;
+
+		for (int y = 0; y < F_HEIGHT; y++) {
+			cout << "   ";
+			// Field values
+			for (int x = 0; x < F_WIDTH; x++) {
+				cout << field[y][x];
+			}
+			cout << "  ";
+			// currentPiece values
+			for (int x = 0; x < F_WIDTH; x++) {
+				cout << currentPiece[y+3][x];
+			}
+			cout << endl;
+		}
+
+		cout << endl << "   Bag sequence: ";
+		for (int i = 0; i < 7; i++) {
+			cout << bag[i];
+		}
+		cout << endl;
+
+	}
+
+	delete bag;
+
+	quit(oldAttr);
+
+	return 0;
+
+}
