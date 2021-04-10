@@ -1,6 +1,8 @@
 # Tetris++
 Modern Tetris with SRS rotation and hold, fully written in C++.
 
+![Preview](https://i.imgur.com/0gChQOI.png)
+
 ### Project Description
 - The aim of this project is to develop a working copy of the Tetris game in command line with C++, with support for modern functionalities.
 - Tetris is a traditional tile-matching video game, where it has the very simple goal of destroying lines of block before the player reaches the top, or otherwise "topping out".
