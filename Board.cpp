@@ -45,6 +45,8 @@ int Board::Get(int yPos, int xPos)
 	// Prevent out of bounds access
 	if (!(yPos >= maxY || yPos < 0 || xPos >= F_WIDTH || xPos < 0))
 		return boardData[yPos][xPos];
+	else
+		return 0;
 }
 
 // boardData Setter
